@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#2563eb">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon.svg">
+<title>Mis horas</title>
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  body { font-family: system-ui, sans-serif; margin: 0; padding: 0 10px 40px; }
+  input, button { font: inherit; padding: 6px; min-width: 0; width: 100%; }
+  button { width: auto; }
+  label { display: flex; flex-direction: column; font-size: .75rem; gap: 2px; }
+  .top { position: sticky; top: 0; background: Canvas; padding: 8px 0; z-index: 2; border-bottom: 1px solid #8885; }
+  .tot { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-top: 8px; }
+  .card { border: 1px solid #8886; border-radius: 8px; padding: 4px 8px; font-size: .72rem; }
+  .card b { display: block; font-size: 1rem; }
+  .card small { opacity: .7; }
+  .over { color: #d33; }
+  details { margin: 10px 0; }
+  .ajustes { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px; }
+  .dia { border: 1px solid #8886; border-radius: 10px; padding: 8px; margin: 8px 0; }
+  .dia.we { background: #8881; }
+  .cab { display: flex; justify-content: space-between; margin-bottom: 6px; }
+  .cab span { font-size: .8rem; opacity: .8; }
+  .g { display: grid; grid-template-columns: 58px 1fr 1fr 64px; gap: 6px; align-items: center; margin-top: 4px; }
+  .g small { font-size: .72rem; opacity: .7; }
+</style>
+</head>
+<body>
+
+<div class="top">
+  <label>Mes <input type="month" id="mes"></label>
+  <div class="tot" id="totales"></div>
+</div>
+
+<details>
+  <summary>Ajustes y precios</summary>
+  <div class="ajustes">
+    <label>Horas contrato/mes <input type="number" id="contrato" step="0.5" inputmode="decimal"></label>
+    <label>Fijo mensual (€) <input type="number" id="fijo" step="0.01" inputmode="decimal"></label>
+    <label>€/h complementaria <input type="number" id="pComp" step="0.001" inputmode="decimal"></label>
+    <label>% deducciones <input type="number" id="ded" step="0.01" inputmode="decimal"></label>
+    <label>€/h noche 22–00 <input type="number" id="pN1" step="0.001" inputmode="decimal"></label>
+    <label>€/h noche 00–06 <input type="number" id="pN2" step="0.001" inputmode="decimal"></label>
+  </div>
+</details>
+
+<div id="dias"></div>
+
+<script>
+const $ = id => document.getElementById(id);
+const KEY = 'horas-v1'; // misma clave: no pierdes lo que ya hayas apuntado
+const hoy = new Date();
+const def = { contrato: 47, fijo: 423.21, pComp: 9.011, pN1: 0.32, pN2: 1.279, ded: 6.5,
+              mes: hoy.getFullYear() + '-' + String(hoy.getMonth() + 1).padStart(2, '0'), dias: {} };
+let S = Object.assign({}, def, JSON.parse(localStorage.getItem(KEY) || '{}'));
+const guardar = () => localStorage.setItem(KEY, JSON.stringify(S));
+
+const aMin = t => t ? (+t.slice(0, 2)) * 60 + (+t.slice(3, 5)) : null;
+const tramo = (a, b) => (a == null || b == null) ? null : ((b - a) + 1440) % 1440;
+const fmt = m => Math.floor(m / 60) + 'h ' + String(Math.round(m % 60)).padStart(2, '0') + 'm';
+const dec = m => (Math.round(m / 60 * 100) / 100).toFixed(2).replace('.', ',');   // 3,65 como en la nómina
+const r2 = x => Math.round(x * 100) / 100;
+const eur = x => x.toFixed(2).replace('.', ',') + ' €';
+
+// Minutos nocturnos del tramo: [22:00–00:00, 00:00–06:00]
+function nocturnos(ini, dur) {
+  let a = 0, b = 0;
+  if (ini == null || !dur) return [0, 0];
+  for (let i = 0; i < dur; i++) {
+    const m = (ini + i) % 1440;
+    if (m >= 1320) a++; else if (m < 360) b++;
+  }
+  return [a, b];
+}
+
+function pintar() {
+  const [y, m] = S.mes.split('-').map(Number);
+  const total = new Date(y, m, 0).getDate();
+  const nom = ['dom', 'lun', 'mar', 'mié', 'jue', 'vie', 'sáb'];
+  let h = '';
+  for (let d = 1; d <= total; d++) {
+    const f = `${S.mes}-${String(d).padStart(2, '0')}`;
+    const x = S.dias[f] || {};
+    const wd = new Date(y, m - 1, d).getDay();
+    const t = k => `<input type="time" data-f="${f}" data-k="${k}" value="${x[k] ?? ''}">`;
+    h += `<div class="dia ${wd % 6 === 0 ? 'we' : ''}">
+      <div class="cab"><b>${nom[wd]} ${d}</b><span id="r-${f}"></span></div>
+      <div class="g"><small>Previsto</small>${t('ps')}${t('pe')}<button data-copy="${f}">⇓</button></div>
+      <div class="g"><small>Real</small>${t('rs')}${t('re')}
+        <input type="number" inputmode="numeric" placeholder="desc." data-f="${f}" data-k="br" value="${x.br ?? ''}"></div>
+    </div>`;
+  }
+  $('dias').innerHTML = h;
+  calcular();
+}
+
+function calcular() {
+  let prev = 0, real = 0, nA = 0, nB = 0;
+  document.querySelectorAll('[id^="r-"]').forEach(el => {
+    const f = el.id.slice(2), x = S.dias[f] || {};
+    prev += tramo(aMin(x.ps), aMin(x.pe)) ?? 0;
+    const rs = aMin(x.rs), bruto = tramo(rs, aMin(x.re)) ?? 0;
+    const r = Math.max(0, bruto - (+x.br || 0));
+    const [a, b] = nocturnos(rs, bruto);
+    real += r; nA += a; nB += b;
+    el.textContent = r ? fmt(r) + (a + b ? ` · 🌙 ${fmt(a + b)}` : '') : '';
+  });
+
+  const cont = (+S.contrato || 0) * 60;
+  const extra = Math.max(0, real - cont);
+  const falta = Math.max(0, cont - real);
+
+  // Como la nómina: horas a 2 decimales × precio, cada concepto redondeado
+  const eComp = r2(r2(extra / 60) * (+S.pComp || 0));
+  const eN1 = r2(r2(nA / 60) * (+S.pN1 || 0));
+  const eN2 = r2(r2(nB / 60) * (+S.pN2 || 0));
+  const pluses = eComp + eN1 + eN2;
+  const brutoTotal = (+S.fijo || 0) + pluses;
+  const neto = brutoTotal * (1 - (+S.ded || 0) / 100);
+
+  const c = (t, v, s = '', cl = '') => `<div class="card">${t}<b class="${cl}">${v}</b>${s ? `<small>${s}</small>` : ''}</div>`;
+  $('totales').innerHTML =
+    c('Reales', fmt(real), dec(real) + ' h') +
+    c('Contrato', fmt(cont), dec(cont) + ' h') +
+    c('Faltan', fmt(falta), dec(falta) + ' h') +
+    c('Previstas', fmt(prev), dec(prev) + ' h') +
+    c('Complementarias', fmt(extra), dec(extra) + ' h', extra ? 'over' : '') +
+    c('Noche', fmt(nA + nB), `${dec(nA)} + ${dec(nB)} h`) +
+    c('Pluses', eur(pluses), `compl. ${eur(eComp)}`) +
+    c('Bruto est.', eur(brutoTotal)) +
+    c('Neto est.', eur(neto));
+}
+
+$('dias').addEventListener('input', e => {
+  const { f, k } = e.target.dataset;
+  if (!f) return;
+  (S.dias[f] ||= {})[k] = e.target.value;
+  guardar(); calcular();
+});
+$('dias').addEventListener('click', e => {
+  const f = e.target.dataset.copy;
+  if (!f) return;
+  const x = (S.dias[f] ||= {});
+  x.rs = x.ps; x.re = x.pe;
+  guardar(); pintar();
+});
+
+['contrato', 'fijo', 'pComp', 'ded', 'pN1', 'pN2'].forEach(id => {
+  $(id).value = S[id];
+  $(id).addEventListener('input', () => { S[id] = $(id).value; guardar(); calcular(); });
+});
+$('mes').value = S.mes;
+$('mes').addEventListener('change', () => { S.mes = $('mes').value; guardar(); pintar(); });
+
+pintar();
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
+</script>
+</body>
+</html>
