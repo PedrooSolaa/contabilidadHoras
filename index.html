@@ -180,9 +180,7 @@ function pintar() {
       <div class="edit">
         <div class="fila"><span>Previsto</span>${t('ps')}${t('pe')}</div>
         <div class="fila"><span>Real</span>${t('rs')}${t('re')}</div>
-        <div class="fila"><span>Descanso</span>
-          <input type="number" inputmode="numeric" placeholder="min" data-f="${f}" data-k="br" value="${x.br ?? ''}">
-          <button class="copiar" data-copy="${f}">Copiar previsto</button></div>
+        <button class="copiar" data-copy="${f}">Copiar previsto a real</button>
       </div></details>`;
   }
   $('dias').innerHTML = h;
@@ -195,9 +193,9 @@ function calcular() {
   document.querySelectorAll('[id^="r-"]').forEach(el => {
     const f = el.id.slice(2), x = S.dias[f] || {};
     prev += tramo(aMin(x.ps), aMin(x.pe)) ?? 0;
-    const rs = aMin(x.rs), bruto = tramo(rs, aMin(x.re)) ?? 0;
-    const r = Math.max(0, bruto - (+x.br || 0));
-    const [a, b] = nocturnos(rs, bruto);
+    const rs = aMin(x.rs);
+    const r = tramo(rs, aMin(x.re)) ?? 0;
+    const [a, b] = nocturnos(rs, r);
     real += r; nA += a; nB += b;
     el.textContent = r ? fmt(r) : '';
     $('n-' + f).textContent = a + b ? '🌙' : '';
