@@ -62,15 +62,17 @@
   .dia summary { list-style: none; display: flex; align-items: center; gap: 10px; padding: 11px 14px; cursor: pointer; }
   .dia summary::-webkit-details-marker { display: none; }
   .num { font-size: 1.25rem; font-weight: 700; width: 30px; }
-  .sem { width: 34px; font-size: .85rem; color: var(--mute); }
+  .sem { width: 34px; font-size: .85rem; color: var(--mute); flex: none; }
   .we .num, .we .sem { color: var(--night); }
-  .prev { flex: 1; font-size: .82rem; color: var(--mute); }
+  .prev { flex: 1; font-size: .78rem; color: var(--mute); }
   .real { font-weight: 700; }
   .luna { width: 20px; text-align: center; }
   .edit { padding: 2px 14px 14px; display: grid; gap: 8px; }
   .fila { display: grid; grid-template-columns: 70px 1fr 1fr; gap: 8px; align-items: center; font-size: .85rem; color: var(--mute); }
   .edit input { width: 100%; min-width: 0; padding: 10px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg); }
   .copiar { border: 0; border-radius: 10px; background: var(--blue); color: #fff; padding: 10px; font-weight: 600; }
+  .doblar { display: grid; gap: 8px; }
+  .edit .doblar > summary { display: block; padding: 4px 0; color: var(--blue); font-weight: 600; font-size: .85rem; }
 
   /* Ajustes */
   dialog { border: 0; border-radius: 22px; padding: 20px; width: min(92vw, 420px); background: var(--panel); color: var(--ink); }
@@ -141,6 +143,9 @@ const def = { contrato: 47, fijo: 423.21, pComp: 9.011, pN1: 0.32, pN2: 1.279, d
 let S = Object.assign({}, def, JSON.parse(localStorage.getItem(KEY) || '{}'));
 const guardar = () => localStorage.setItem(KEY, JSON.stringify(S));
 
+// Cada día tiene hasta 2 turnos: [prev. entrada, prev. salida, real entrada, real salida]
+const TURNOS = [['ps', 'pe', 'rs', 're'], ['ps2', 'pe2', 'rs2', 're2']];
+
 const aMin = t => t ? (+t.slice(0, 2)) * 60 + (+t.slice(3, 5)) : null;
 const tramo = (a, b) => (a == null || b == null) ? null : ((b - a) + 1440) % 1440;
 const fmt = m => Math.floor(m / 60) + 'h ' + pad(Math.round(m % 60)) + 'm';
@@ -174,12 +179,18 @@ function pintar() {
     const wd = new Date(y, m - 1, d).getDay();
     const t = k => `<input type="time" data-f="${f}" data-k="${k}" value="${x[k] ?? ''}">`;
     const esHoy = f === hoyStr;
+    const hayT2 = x.ps2 || x.pe2 || x.rs2 || x.re2;
     h += `<details class="dia ${wd % 6 === 0 ? 'we' : ''} ${esHoy ? 'hoy' : ''}" id="d-${f}" ${esHoy ? 'open' : ''}>
       <summary><span class="num">${d}</span><span class="sem">${nom[wd]}</span>
         <span class="prev" id="pv-${f}"></span><span class="real" id="r-${f}"></span><span class="luna" id="n-${f}"></span></summary>
       <div class="edit">
         <div class="fila"><span>Previsto</span>${t('ps')}${t('pe')}</div>
         <div class="fila"><span>Real</span>${t('rs')}${t('re')}</div>
+        <details class="doblar" ${hayT2 ? 'open' : ''}>
+          <summary>+ Doblar (segundo turno)</summary>
+          <div class="fila"><span>Previsto</span>${t('ps2')}${t('pe2')}</div>
+          <div class="fila"><span>Real</span>${t('rs2')}${t('re2')}</div>
+        </details>
         <button class="copiar" data-copy="${f}">Copiar previsto a real</button>
       </div></details>`;
   }
@@ -192,14 +203,20 @@ function calcular() {
   let prev = 0, real = 0, nA = 0, nB = 0;
   document.querySelectorAll('[id^="r-"]').forEach(el => {
     const f = el.id.slice(2), x = S.dias[f] || {};
-    prev += tramo(aMin(x.ps), aMin(x.pe)) ?? 0;
-    const rs = aMin(x.rs);
-    const r = tramo(rs, aMin(x.re)) ?? 0;
-    const [a, b] = nocturnos(rs, r);
+    let r = 0, a = 0, b = 0;
+    const horarios = [];
+    TURNOS.forEach(([ps, pe, rs, re]) => {
+      prev += tramo(aMin(x[ps]), aMin(x[pe])) ?? 0;
+      const ini = aMin(x[rs]);
+      const dur = tramo(ini, aMin(x[re])) ?? 0;
+      const [na, nb] = nocturnos(ini, dur);
+      r += dur; a += na; b += nb;
+      if (x[ps] && x[pe]) horarios.push(`${x[ps]}–${x[pe]}`);
+    });
     real += r; nA += a; nB += b;
     el.textContent = r ? fmt(r) : '';
     $('n-' + f).textContent = a + b ? '🌙' : '';
-    $('pv-' + f).textContent = x.ps && x.pe ? `${x.ps}–${x.pe}` : '';
+    $('pv-' + f).textContent = horarios.join(' y ');
   });
 
   const cont = (+S.contrato || 0) * 60;
@@ -240,9 +257,11 @@ $('dias').addEventListener('click', e => {
   const f = e.target.dataset.copy;
   if (!f) return;
   const x = (S.dias[f] ||= {});
-  x.rs = x.ps || ''; x.re = x.pe || '';
-  document.querySelector(`[data-f="${f}"][data-k="rs"]`).value = x.rs;
-  document.querySelector(`[data-f="${f}"][data-k="re"]`).value = x.re;
+  TURNOS.forEach(([ps, pe, rs, re]) => {
+    x[rs] = x[ps] || ''; x[re] = x[pe] || '';
+    document.querySelector(`[data-f="${f}"][data-k="${rs}"]`).value = x[rs];
+    document.querySelector(`[data-f="${f}"][data-k="${re}"]`).value = x[re];
+  });
   guardar(); calcular();
 });
 
